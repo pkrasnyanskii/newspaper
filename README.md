@@ -8,6 +8,6 @@ Newspaper CSaSD FIT 2026 Project
 
 - Use Case Diagram
 - Class Diagram
-- Sequence diagrams UC-1 ... UC-6
+- Sequence diagrams UC-1 ... UC-8
 
 PNG exports of these diagrams are stored in the wiki repository (`diagrams/`).
