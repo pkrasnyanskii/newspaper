@@ -1,0 +1,9 @@
+# Visual Paradigm auto-backups and lock files
+*.vpp.bak_*
+*.vpp.lck
+.*.vpp.lck
+
+# GitHub wiki is a separate repository (<repo>.wiki.git), cloned into wiki/
+wiki/
+
+.idea/
