@@ -8,6 +8,9 @@ Newspaper CSaSD FIT 2026 Project
 
 - Use Case Diagram
 - Class Diagram
+- Data Storage Model (class diagram of the issue file format)
 - Sequence diagrams UC-1 ... UC-8
 
+
+1
 PNG exports of these diagrams are stored in the wiki repository (`diagrams/`).
