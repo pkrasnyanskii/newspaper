@@ -41,4 +41,8 @@ The form fills the available window width. In a narrow window, the detail fields
 - Deployment Diagram
 - Sequence diagrams UC-1 through UC-9
 
-The PNG exports of these diagrams and the user interface sketches are not in this repository: they are stored in the `diagrams/` folder of the separate wiki repository ([newspaper.wiki.git](https://github.com/pkrasnyanskii/newspaper.wiki.git)) and shown on the [Vision](https://github.com/pkrasnyanskii/newspaper/wiki/Vision) page.
+The PNG exports of these diagrams and the user interface sketches are not in this repository: they are stored in the `diagrams/` folder of the project [wiki](https://github.com/pkrasnyanskii/newspaper/wiki), which is a separate git repository, and shown on the [Vision](https://github.com/pkrasnyanskii/newspaper/wiki/Vision) page. To get the files locally:
+
+```bash
+git clone https://github.com/pkrasnyanskii/newspaper.wiki.git wiki
+```
