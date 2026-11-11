@@ -7,3 +7,9 @@
 wiki/
 
 .idea/
+.gradle/
+build/
+out/
+
+# Local documents created while running the application
+/*.issue
