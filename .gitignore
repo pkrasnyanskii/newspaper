@@ -10,6 +10,12 @@ wiki/
 .gradle/
 build/
 out/
+bin/
 
 # Local documents created while running the application
 /*.issue
+
+# Local Claude Code context (not for the team repository)
+CLAUDE.md
+.claude/
+docs/Vision-draft.md
