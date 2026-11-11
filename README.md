@@ -1,6 +1,8 @@
 # Newspaper
 
-Periodical Publishing Software, Stage 1: a single-user desktop application for preparing a printed issue.
+Periodical Publishing Software, Stage 1: a desktop client-server application for preparing a printed issue, in which an Editor, a Journalist and a Layout Designer work on the same issue at the same time from their own computers (see the [Vision](https://github.com/pkrasnyanskii/newspaper/wiki/Vision)).
+
+The current prototype is the first working part of it: a single-user JavaFX application that creates an issue, manages its articles and saves/opens `.issue` files. The server mode and the roles are not implemented yet.
 
 ## Build and run
 
@@ -36,6 +38,7 @@ The form fills the available window width. In a narrow window, the detail fields
 - Use Case Diagram
 - Class Diagram
 - Data Storage Model
-- Sequence diagrams UC-1 through UC-8
+- Deployment Diagram
+- Sequence diagrams UC-1 through UC-9
 
-PNG exports are stored in the separate wiki repository (`diagrams/`).
+The PNG exports of these diagrams and the user interface sketches are not in this repository: they are stored in the `diagrams/` folder of the separate wiki repository ([newspaper.wiki.git](https://github.com/pkrasnyanskii/newspaper.wiki.git)) and shown on the [Vision](https://github.com/pkrasnyanskii/newspaper/wiki/Vision) page.
