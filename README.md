@@ -13,7 +13,11 @@ Java 21 is required. The Gradle wrapper downloads the project's build dependenci
 ./gradlew run
 ```
 
+## Current implementation
+
 The application creates an issue with its number, date, page format and title, manages articles with embedded PNG/JPEG images, and saves/opens local `.issue` files.
+
+Server mode (`--server`), role-based permissions, synchronization, edit locks and automatic recovery are not available in this version. Page layout, text styling, advertisements, automatic contents, cover images and PDF export are also not implemented yet.
 
 ## Using the current application
 
