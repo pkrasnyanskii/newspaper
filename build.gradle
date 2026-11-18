@@ -3,36 +3,30 @@ plugins {
     id 'org.openjfx.javafxplugin' version '0.1.0'
 }
 
-group = 'ru.nsu.newspaper'
-version = '0.1.0'
-
-repositories {
-    mavenCentral()
+allprojects {
+    group = 'ru.nsu.newspaper'
+    version = '0.2.0'
+    repositories { mavenCentral() }
 }
 
-java {
-    toolchain {
-        languageVersion = JavaLanguageVersion.of(21)
+subprojects {
+    apply plugin: 'java-library'
+    java { toolchain { languageVersion = JavaLanguageVersion.of(21) } }
+    dependencies {
+        testImplementation 'org.junit.jupiter:junit-jupiter:5.14.4'
+        testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
     }
+    tasks.named('test') { useJUnitPlatform() }
 }
 
+java { toolchain { languageVersion = JavaLanguageVersion.of(21) } }
 javafx {
     version = '21.0.13'
     modules = ['javafx.controls']
 }
-
 dependencies {
-    implementation platform('com.fasterxml.jackson:jackson-bom:2.22.0')
-    implementation 'com.fasterxml.jackson.core:jackson-databind'
-
-    testImplementation 'org.junit.jupiter:junit-jupiter:5.14.4'
-    testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+    implementation project(':client')
+    implementation project(':server')
 }
-
-application {
-    mainClass = 'ru.nsu.newspaper.MainApp'
-}
-
-tasks.named('test') {
-    useJUnitPlatform()
-}
+application { mainClass = 'ru.nsu.newspaper.Launcher' }
+tasks.named('test') { dependsOn subprojects.collect { it.tasks.named('test') } }

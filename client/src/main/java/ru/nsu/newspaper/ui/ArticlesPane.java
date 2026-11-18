@@ -9,7 +9,9 @@ import ru.nsu.newspaper.model.Article;
 import ru.nsu.newspaper.model.Issue;
 
 import java.util.UUID;
-import java.util.function.Consumer;
+import java.util.List;
+import ru.nsu.newspaper.protocol.Protocol.EditLock;
+import ru.nsu.newspaper.protocol.Role;
 
 /** Article list and preview. Draft edits stay in a modal editor until applied. */
 public final class ArticlesPane extends ScrollPane {
@@ -24,19 +26,27 @@ public final class ArticlesPane extends ScrollPane {
     private final Label empty = new Label("Create an article or select one from the list.");
     private final Button add = new Button("New article");
     private final Window owner;
-    private final Consumer<Issue> onChange;
+    public interface Actions {
+        void create();
+        void edit(Article article);
+        void delete(Article article);
+    }
+    private final Actions actions;
+    private final Button edit = new Button("Edit article");
+    private final Button delete = new Button("Delete article");
+    private final Label lockStatus = new Label();
+    private List<EditLock> locks = List.of();
+    private UUID sessionId;
+    private boolean writable;
     private Issue issue;
 
-    public ArticlesPane(Window owner, Consumer<Issue> onChange) {
+    public ArticlesPane(Window owner, Actions actions) {
         this.owner = owner;
-        this.onChange = onChange;
+        this.actions = actions;
         add.setId("new-article");
         add.getStyleClass().add("primary-button");
         add.setMaxWidth(Double.MAX_VALUE);
-        add.setOnAction(event -> new ArticleEditor(owner, null).showAndWait().ifPresent(article -> {
-            onChange.accept(issue.addArticle(article));
-            select(article.id());
-        }));
+        add.setOnAction(event -> { if (writable && issue != null) actions.create(); });
         count.getStyleClass().add("section-heading");
         list.setId("article-list");
         list.setMinSize(0, 180);
@@ -71,16 +81,17 @@ public final class ArticlesPane extends ScrollPane {
         body.getStyleClass().add("article-preview");
         length.getStyleClass().add("muted");
         gallery.setMinWidth(0);
-        Button edit = new Button("Edit article");
         edit.setId("edit-article");
         edit.setOnAction(event -> editSelected());
-        Button delete = new Button("Delete article");
         delete.setId("delete-article");
         delete.getStyleClass().add("danger-button");
         delete.setOnAction(event -> deleteSelected());
         for (Button button : new Button[]{edit, delete}) button.setMinWidth(Region.USE_PREF_SIZE);
-        FlowPane actions = new FlowPane(10, 10, edit, delete);
-        details = new VBox(14, title, author, actions, body, length, gallery);
+        FlowPane buttons = new FlowPane(10, 10, edit, delete);
+        lockStatus.setId("article-lock-status");
+        lockStatus.setWrapText(true);
+        lockStatus.getStyleClass().add("muted");
+        details = new VBox(14, title, author, lockStatus, buttons, body, length, gallery);
         details.setMinWidth(0);
         VBox.setVgrow(body, Priority.ALWAYS);
         empty.setWrapText(true);
@@ -111,7 +122,7 @@ public final class ArticlesPane extends ScrollPane {
                 : list.getSelectionModel().getSelectedItem().id();
         this.issue = issue;
         list.getItems().setAll(issue == null ? java.util.List.of() : issue.articles());
-        add.setDisable(issue == null);
+        add.setDisable(issue == null || !writable);
         int articleCount = list.getItems().size();
         count.setText(articleCount + (articleCount == 1 ? " article" : " articles"));
         select(selected);
@@ -132,6 +143,7 @@ public final class ArticlesPane extends ScrollPane {
         details.setManaged(article != null);
         empty.setVisible(article == null);
         empty.setManaged(article == null);
+        updateAccess();
         if (article == null) return;
         title.setText(article.title());
         author.setText(article.author().isEmpty() ? "No author specified" : "By " + article.author());
@@ -145,26 +157,34 @@ public final class ArticlesPane extends ScrollPane {
         gallery.setManaged(!article.images().isEmpty());
     }
 
+    public void setAccess(Role role, boolean online, UUID sessionId, List<EditLock> locks) {
+        this.writable = online && role == Role.JOURNALIST;
+        this.sessionId = sessionId;
+        this.locks = locks;
+        updateAccess();
+    }
+
+    private void updateAccess() {
+        Article selected = list.getSelectionModel().getSelectedItem();
+        EditLock lock = selected == null ? null : locks.stream()
+                .filter(value -> value.articleId().equals(selected.id())).findFirst().orElse(null);
+        boolean heldByOther = lock != null && !lock.sessionId().equals(sessionId);
+        lockStatus.setText(lock == null ? "" : "Being edited by " + lock.role()
+                + (heldByOther ? "" : " (you)"));
+        lockStatus.setManaged(lock != null);
+        add.setDisable(!writable || issue == null);
+        edit.setDisable(!writable || selected == null || heldByOther);
+        delete.setDisable(!writable || selected == null || heldByOther);
+    }
+
     private void editSelected() {
         Article selected = list.getSelectionModel().getSelectedItem();
-        if (selected == null) return;
-        new ArticleEditor(owner, selected).showAndWait().ifPresent(edited -> {
-            if (!edited.equals(selected)) onChange.accept(issue.updateArticle(edited));
-        });
+        if (selected != null && !edit.isDisabled()) actions.edit(selected);
     }
 
     private void deleteSelected() {
         Article selected = list.getSelectionModel().getSelectedItem();
-        if (selected == null) return;
-        ButtonType delete = new ButtonType("Delete article", ButtonBar.ButtonData.OK_DONE);
-        Alert confirmation = new Alert(Alert.AlertType.CONFIRMATION,
-                "Delete “" + selected.title() + "” from this issue?", delete, ButtonType.CANCEL);
-        confirmation.initOwner(owner);
-        confirmation.setTitle("Delete article");
-        confirmation.setHeaderText("Delete this article?");
-        if (confirmation.showAndWait().orElse(ButtonType.CANCEL) == delete) {
-            onChange.accept(issue.removeArticle(selected.id()));
-        }
+        if (selected != null && !delete.isDisabled()) actions.delete(selected);
     }
 
     private void styleCard(VBox card) {

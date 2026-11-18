@@ -41,7 +41,24 @@ public final class IssueStorage {
             .streamReadConstraints(StreamReadConstraints.builder().maxStringLength(MAX_JSON_BYTES).build())
             .build());
 
+    public void validate(Issue issue) throws IOException {
+        if (mapper.writerWithDefaultPrettyPrinter().writeValueAsBytes(toDocument(issue)).length > MAX_JSON_BYTES) {
+            throw new IOException("Issue text exceeds the 20 MB file limit.");
+        }
+        Map<String, ImageAsset> images = new LinkedHashMap<>();
+        for (Article article : issue.articles()) {
+            for (ImageAsset image : article.images()) images.putIfAbsent(image.archivePath(), image);
+        }
+        if (images.values().stream().mapToLong(image -> image.bytes().length).sum() > MAX_IMAGE_BYTES) {
+            throw new IOException("Issue images exceed the 128 MB file limit.");
+        }
+    }
+
     public void save(Issue issue, Path file) throws IOException {
+        saveRecovery(issue, file, null);
+    }
+
+    void saveRecovery(Issue issue, Path file, byte[] recoveryMetadata) throws IOException {
         Objects.requireNonNull(issue, "issue");
         Objects.requireNonNull(file, "file");
         Path target = file.toAbsolutePath();
@@ -56,6 +73,11 @@ public final class IssueStorage {
                 zip.putNextEntry(new ZipEntry("issue.json"));
                 zip.write(json);
                 zip.closeEntry();
+                if (recoveryMetadata != null) {
+                    zip.putNextEntry(new ZipEntry("recovery.json"));
+                    zip.write(recoveryMetadata);
+                    zip.closeEntry();
+                }
                 Map<String, ImageAsset> images = new LinkedHashMap<>();
                 for (Article article : issue.articles()) {
                     for (ImageAsset image : article.images()) images.putIfAbsent(image.archivePath(), image);

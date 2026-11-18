@@ -1,0 +1,6 @@
+plugins { id 'org.openjfx.javafxplugin' }
+javafx {
+    version = '21.0.13'
+    modules = ['javafx.controls']
+}
+dependencies { api project(':shared') }

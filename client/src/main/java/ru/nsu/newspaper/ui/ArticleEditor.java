@@ -31,9 +31,16 @@ public final class ArticleEditor extends Dialog<Article> {
     private final Label validation = new Label();
     private final ScrollPane scroll = new ScrollPane();
     private final Article original;
+    private final java.util.UUID draftId;
+    private final Label connectionStatus = new Label();
+    private VBox content;
+    private Button applyButton;
+    private java.util.function.Consumer<Article> submit;
+    private boolean pending;
 
     public ArticleEditor(Window owner, Article original) {
         this.original = original;
+        draftId = original == null ? java.util.UUID.randomUUID() : original.id();
         initOwner(owner);
         setTitle(original == null ? "New article" : "Edit article");
         setResizable(true);
@@ -55,7 +62,7 @@ public final class ArticleEditor extends Dialog<Article> {
 
         Label heading = new Label(original == null ? "Write an article" : "Edit article");
         heading.getStyleClass().add("section-heading");
-        Label hint = new Label("Apply the article to this issue, then use Save in the main window to write the .issue file.");
+        Label hint = new Label("Apply sends your changes to the shared issue. Cancel discards this draft.");
         hint.setWrapText(true);
         hint.getStyleClass().add("muted");
         Button addImages = new Button("Add images...");
@@ -75,7 +82,7 @@ public final class ArticleEditor extends Dialog<Article> {
         gallery.setMinWidth(0);
         refreshImages();
 
-        VBox content = new VBox(16, heading, hint, field("Title *", title), validation, field("Author", author),
+        content = new VBox(16, heading, hint, field("Title *", title), validation, field("Author", author),
                 field("Article text", body), new VBox(8, addImages, imageHint, gallery));
         content.setPadding(new Insets(24));
         content.setMinWidth(0);
@@ -84,14 +91,19 @@ public final class ArticleEditor extends Dialog<Article> {
         scroll.setHbarPolicy(ScrollPane.ScrollBarPolicy.NEVER);
         scroll.getStyleClass().add("workspace");
         scroll.setMinSize(0, 0);
-        getDialogPane().setContent(scroll);
+        connectionStatus.setWrapText(true);
+        connectionStatus.getStyleClass().add("validation-error");
+        VBox shell = new VBox(10, connectionStatus, scroll);
+        VBox.setVgrow(scroll, Priority.ALWAYS);
+        shell.setMinSize(0, 0);
+        getDialogPane().setContent(shell);
         getDialogPane().setPrefSize(740, 720);
         getDialogPane().setMinSize(0, 0);
         getDialogPane().getStylesheets().add(Objects.requireNonNull(
                 ArticleEditor.class.getResource("/ru/nsu/newspaper/app.css")).toExternalForm());
         ButtonType apply = new ButtonType(original == null ? "Add article" : "Apply changes", ButtonBar.ButtonData.OK_DONE);
         getDialogPane().getButtonTypes().addAll(apply, ButtonType.CANCEL);
-        Button applyButton = (Button) getDialogPane().lookupButton(apply);
+        applyButton = (Button) getDialogPane().lookupButton(apply);
         applyButton.setId("apply-article");
         applyButton.getStyleClass().add("primary-button");
         applyButton.addEventFilter(ActionEvent.ACTION, event -> {
@@ -100,9 +112,13 @@ public final class ArticleEditor extends Dialog<Article> {
                 title.requestFocus();
                 scroll.setVvalue(0);
                 event.consume();
+            } else if (submit != null) {
+                event.consume();
+                submit.accept(article());
             }
         });
         setResultConverter(button -> button == apply ? article() : null);
+        setOnCloseRequest(event -> { if (pending) event.consume(); });
         setOnShown(event -> Platform.runLater(() -> {
             if (!isShowing()) return;
             Stage window = (Stage) getDialogPane().getScene().getWindow();
@@ -115,9 +131,28 @@ public final class ArticleEditor extends Dialog<Article> {
         }));
     }
 
+    public void onSubmit(java.util.function.Consumer<Article> action) { submit = action; }
+
+    public void setWritable(boolean writable, String message) {
+        title.setEditable(writable);
+        author.setEditable(writable);
+        body.setEditable(writable);
+        content.lookupAll(".button").forEach(button -> button.setDisable(!writable));
+        applyButton.setDisable(!writable);
+        connectionStatus.setText(message);
+        connectionStatus.setManaged(!message.isBlank());
+    }
+
+    public void setPending(boolean pending) {
+        this.pending = pending;
+        getDialogPane().lookupButton(ButtonType.CANCEL).setDisable(pending);
+    }
+
+    public void showFailure(String message) { showValidation(message); }
+
     private Article article() {
         return original == null
-                ? Article.create(title.getText(), author.getText(), body.getText(), images)
+                ? new Article(draftId, title.getText(), author.getText(), body.getText(), images)
                 : original.withContent(title.getText(), author.getText(), body.getText(), images);
     }
 
