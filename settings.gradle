@@ -1,1 +1,2 @@
 rootProject.name = 'newspaper'
+include 'shared', 'server', 'client'
