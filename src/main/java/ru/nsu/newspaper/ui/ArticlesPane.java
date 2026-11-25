@@ -18,7 +18,8 @@ public final class ArticlesPane extends ScrollPane {
     private final Label title = new Label();
     private final Label author = new Label();
     private final Label length = new Label();
-    private final TextArea body = new TextArea();
+    private final ScrollPane body = new ScrollPane();
+    private final Button style = new Button("Style text...");
     private final FlowPane gallery = new FlowPane(12, 12);
     private final VBox details;
     private final Label empty = new Label("Create an article or select one from the list.");
@@ -64,10 +65,9 @@ public final class ArticlesPane extends ScrollPane {
         author.getStyleClass().add("muted");
         author.setWrapText(true);
         body.setId("article-preview-body");
-        body.setEditable(false);
-        body.setWrapText(true);
+        body.setFitToWidth(true);
         body.setMinSize(0, 180);
-        body.setPrefRowCount(12);
+        body.setPrefHeight(260);
         body.getStyleClass().add("article-preview");
         length.getStyleClass().add("muted");
         gallery.setMinWidth(0);
@@ -79,7 +79,12 @@ public final class ArticlesPane extends ScrollPane {
         delete.getStyleClass().add("danger-button");
         delete.setOnAction(event -> deleteSelected());
         for (Button button : new Button[]{edit, delete}) button.setMinWidth(Region.USE_PREF_SIZE);
-        FlowPane actions = new FlowPane(10, 10, edit, delete);
+        style.setOnAction(event -> {
+            Article selected = list.getSelectionModel().getSelectedItem();
+            ArticleStyles.editor(owner, selected).showAndWait()
+                    .ifPresent(edited -> onChange.accept(issue.updateArticle(edited)));
+        });
+        FlowPane actions = new FlowPane(10, 10, edit, delete, style);
         details = new VBox(14, title, author, actions, body, length, gallery);
         details.setMinWidth(0);
         VBox.setVgrow(body, Priority.ALWAYS);
@@ -135,8 +140,9 @@ public final class ArticlesPane extends ScrollPane {
         if (article == null) return;
         title.setText(article.title());
         author.setText(article.author().isEmpty() ? "No author specified" : "By " + article.author());
-        body.setText(article.text());
-        body.positionCaret(0);
+        body.setContent(ArticleStyles.preview(article));
+        body.setVvalue(0);
+        style.setDisable(article.text().isEmpty());
         int characters = article.text().codePointCount(0, article.text().length());
         int imageCount = article.images().size();
         length.setText(characters + " characters · " + imageCount + (imageCount == 1 ? " image" : " images"));

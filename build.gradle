@@ -24,6 +24,7 @@ javafx {
 dependencies {
     implementation platform('com.fasterxml.jackson:jackson-bom:2.22.0')
     implementation 'com.fasterxml.jackson.core:jackson-databind'
+    implementation 'org.apache.pdfbox:pdfbox:3.0.7'
 
     testImplementation 'org.junit.jupiter:junit-jupiter:5.14.4'
     testRuntimeOnly 'org.junit.platform:junit-platform-launcher'

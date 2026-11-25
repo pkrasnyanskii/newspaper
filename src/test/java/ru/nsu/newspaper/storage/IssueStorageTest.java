@@ -12,8 +12,10 @@ import java.time.LocalDate;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
 import java.util.zip.ZipOutputStream;
+import java.nio.charset.StandardCharsets;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -46,6 +48,23 @@ class IssueStorageTest {
     }
 
     @Test
+    void opensAVersionOneArchiveFromThePrototype() throws IOException {
+        Path file = folder.resolve("prototype.issue");
+        String json = """
+                {"format":"periodical-issue","formatVersion":1,"id":"b4a78839-f4ab-48cb-a231-b68f21066977",
+                 "issueNumber":1,"publicationDate":"2026-11-11","pageFormat":{"name":"A4","width":210,"height":297},
+                 "cover":{"title":"News","coverImage":null},"templates":[],"articles":[{
+                   "id":"604205e1-f771-47d9-89c9-1ce934964436","title":"Original article","author":"","text":"Text",
+                   "images":[],"styledRanges":[],"position":null,"size":null}],"advertisements":[],"pages":[]}
+                """;
+        writeArchive(file, json);
+        Issue issue = storage.open(file);
+        assertEquals("Original article", issue.articles().getFirst().title());
+        assertNull(issue.contents().getFirst().pageNumber());
+        assertTrue(issue.pages().isEmpty());
+    }
+
+    @Test
     void refusesDataItCannotPreserveYet() throws IOException {
         Path file = folder.resolve("future.issue");
         String json = """
@@ -53,12 +72,15 @@ class IssueStorageTest {
                  "issueNumber":1,"publicationDate":"2026-11-11","pageFormat":{"name":"A4","width":210,"height":297},
                  "cover":{"title":"News","coverImage":null},"templates":[],"articles":[{}],"advertisements":[],"pages":[]}
                 """;
+        writeArchive(file, json);
+        assertThrows(IOException.class, () -> storage.open(file));
+    }
+
+    private void writeArchive(Path file, String json) throws IOException {
         try (ZipOutputStream zip = new ZipOutputStream(Files.newOutputStream(file))) {
             zip.putNextEntry(new ZipEntry("issue.json"));
-            zip.write(json.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            zip.write(json.getBytes(StandardCharsets.UTF_8));
             zip.closeEntry();
         }
-
-        assertThrows(IOException.class, () -> storage.open(file));
     }
 }

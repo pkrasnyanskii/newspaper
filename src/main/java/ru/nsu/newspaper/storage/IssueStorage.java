@@ -6,10 +6,15 @@ import com.fasterxml.jackson.core.StreamReadConstraints;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import ru.nsu.newspaper.model.Article;
+import ru.nsu.newspaper.model.Advertisement;
 import ru.nsu.newspaper.model.Cover;
 import ru.nsu.newspaper.model.ImageAsset;
 import ru.nsu.newspaper.model.Issue;
 import ru.nsu.newspaper.model.PageFormat;
+import ru.nsu.newspaper.model.Page;
+import ru.nsu.newspaper.model.PageTemplate;
+import ru.nsu.newspaper.model.StyledRange;
+import ru.nsu.newspaper.model.TextStyle;
 
 import java.io.IOException;
 import java.io.InputStream;
@@ -30,10 +35,10 @@ import java.util.zip.ZipFile;
 import java.util.zip.ZipOutputStream;
 import java.util.zip.CRC32;
 
-/** Stores the currently supported issue fields in the Stage 1 .issue archive. */
+/** Reads and writes the Stage 1 .issue archive. */
 public final class IssueStorage {
     private static final String FORMAT = "periodical-issue";
-    private static final int FORMAT_VERSION = 1;
+    private static final int FORMAT_VERSION = 2;
     private static final int MAX_JSON_BYTES = 20 * 1024 * 1024;
     private static final long MAX_IMAGE_BYTES = 128L * 1024 * 1024;
 
@@ -57,9 +62,12 @@ public final class IssueStorage {
                 zip.write(json);
                 zip.closeEntry();
                 Map<String, ImageAsset> images = new LinkedHashMap<>();
+                addImage(images, issue.cover().image());
                 for (Article article : issue.articles()) {
-                    for (ImageAsset image : article.images()) images.putIfAbsent(image.archivePath(), image);
+                    article.images().forEach(image -> addImage(images, image));
                 }
+                issue.advertisements().forEach(ad -> addImage(images, ad.image()));
+                issue.pages().forEach(page -> page.placements().forEach(item -> addImage(images, item.image())));
                 long totalBytes = 0;
                 for (ImageAsset image : images.values()) {
                     byte[] bytes = image.bytes();
@@ -123,8 +131,35 @@ public final class IssueStorage {
         pageFormat.put("height", issue.pageFormat().heightMm());
         ObjectNode cover = root.putObject("cover");
         cover.put("title", issue.cover().title());
-        cover.putNull("coverImage");
-        root.putArray("templates");
+        writeImage(cover, "coverImage", issue.cover().image());
+        var templates = root.putArray("templates");
+        for (PageTemplate template : issue.templates()) {
+            ObjectNode node = templates.addObject();
+            node.put("id", template.id().toString());
+            node.put("name", template.name());
+            writeLayout(node, template.layout());
+        }
+        var boxes = new LinkedHashMap<UUID, Page.Box>();
+        var pages = root.putArray("pages");
+        for (Page page : issue.pages()) {
+            ObjectNode node = pages.addObject();
+            node.put("id", page.id().toString());
+            writeLayout(node, page.layout());
+            node.put("templateId", page.templateId() == null ? null : page.templateId().toString());
+            var elements = node.putArray("elements");
+            var standalone = node.putArray("imageElements");
+            for (Page.Placement item : page.placements()) {
+                elements.add(item.elementId().toString());
+                if (item.image() == null) {
+                    boxes.put(item.elementId(), item.box());
+                } else {
+                    ObjectNode image = standalone.addObject();
+                    image.put("id", item.elementId().toString());
+                    writeImage(image, "image", item.image());
+                    writeBox(image, item.box());
+                }
+            }
+        }
         var articles = root.putArray("articles");
         for (Article article : issue.articles()) {
             ObjectNode node = articles.addObject();
@@ -134,26 +169,52 @@ public final class IssueStorage {
             node.put("text", article.text());
             var images = node.putArray("images");
             article.images().forEach(image -> images.add(image.archivePath()));
-            node.putArray("styledRanges");
-            // Articles have no placement until page layout is implemented.
-            node.putNull("position");
-            node.putNull("size");
+            var styles = node.putArray("styledRanges");
+            article.styledRanges().forEach(range -> styles.add(mapper.valueToTree(range)));
+            writeBox(node, boxes.get(article.id()));
         }
-        root.putArray("advertisements");
-        root.putArray("pages");
+        var advertisements = root.putArray("advertisements");
+        for (Advertisement ad : issue.advertisements()) {
+            ObjectNode node = advertisements.addObject();
+            node.put("id", ad.id().toString());
+            node.put("text", ad.text());
+            writeImage(node, "image", ad.image());
+            writeBox(node, boxes.get(ad.id()));
+        }
         return root;
     }
 
+    private static void addImage(Map<String, ImageAsset> images, ImageAsset image) {
+        if (image != null) images.putIfAbsent(image.archivePath(), image);
+    }
+
+    private static void writeImage(ObjectNode node, String field, ImageAsset image) {
+        node.put(field, image == null ? null : image.archivePath());
+    }
+
+    private void writeLayout(ObjectNode node, Page.Layout layout) {
+        node.put("columns", layout.columns());
+        node.set("margins", mapper.valueToTree(layout.margins()));
+        node.put("headerFooterText", layout.headerFooterText());
+    }
+
+    private static void writeBox(ObjectNode node, Page.Box box) {
+        if (box == null) {
+            node.putNull("position");
+            node.putNull("size");
+        } else {
+            node.putObject("position").put("x", box.x()).put("y", box.y());
+            node.putObject("size").put("width", box.width()).put("height", box.height());
+        }
+    }
+
     private Issue fromDocument(JsonNode root, ZipFile zip) throws IOException {
-        if (root == null || !root.isObject() || !FORMAT.equals(text(root, "format"))
-                || integer(root, "formatVersion") != FORMAT_VERSION) {
+        if (root == null || !root.isObject() || !FORMAT.equals(text(root, "format"))) {
             throw new IOException("Unsupported issue file format");
         }
-        for (String field : new String[]{"templates", "advertisements", "pages"}) {
-            JsonNode array = root.path(field);
-            if (!array.isArray() || !array.isEmpty()) {
-                throw new IOException("This version cannot open an issue with " + field);
-            }
+        int version = integer(root, "formatVersion");
+        if (version < 1 || version > FORMAT_VERSION) {
+            throw new IOException("Unsupported issue file version " + version);
         }
         JsonNode formatNode = root.path("pageFormat");
         PageFormat pageFormat = PageFormat.valueOf(text(formatNode, "name"));
@@ -162,53 +223,131 @@ public final class IssueStorage {
             throw new IOException("Invalid page format dimensions");
         }
         JsonNode coverNode = root.path("cover");
-        if (!coverNode.path("coverImage").isNull()) {
-            throw new IOException("This version cannot open cover images yet");
-        }
-        JsonNode articleNodes = root.path("articles");
-        if (!articleNodes.isArray()) throw new IOException("Missing or invalid articles");
+        var assets = new ArchiveImages(zip);
+        var cover = new Cover(text(coverNode, "title"), assets.readOptional(coverNode.path("coverImage")));
+        var placed = new LinkedHashMap<UUID, Page.Placement>();
         List<Article> articles = new ArrayList<>();
-        Map<String, ImageAsset> loadedImages = new LinkedHashMap<>();
-        long totalBytes = 0;
-        for (JsonNode node : articleNodes) {
-            JsonNode styles = node.path("styledRanges");
-            if (!styles.isArray() || !styles.isEmpty()
-                    || !node.path("position").isNull() || !node.path("size").isNull()) {
-                throw new IOException("This version cannot open styled or placed articles yet");
-            }
-            JsonNode references = node.path("images");
-            if (!references.isArray()) throw new IOException("Missing or invalid article images");
+        for (JsonNode node : array(root, "articles")) {
+            UUID id = id(node);
             List<ImageAsset> images = new ArrayList<>();
-            for (JsonNode reference : references) {
-                if (!reference.isTextual()
-                        || !reference.textValue().matches("images/[a-f0-9]{64}\\.(png|jpg)")) {
-                    throw new IOException("Invalid article image reference");
-                }
-                String path = reference.textValue();
-                ImageAsset image = loadedImages.get(path);
-                if (image == null) {
-                    ZipEntry imageEntry = zip.getEntry(path);
-                    if (imageEntry == null || imageEntry.isDirectory() || imageEntry.getSize() > ImageAsset.MAX_BYTES) {
-                        throw new IOException("Missing or oversized article image: " + path);
-                    }
-                    byte[] bytes;
-                    try (InputStream input = zip.getInputStream(imageEntry)) {
-                        bytes = input.readNBytes(ImageAsset.MAX_BYTES + 1);
-                    }
-                    totalBytes += bytes.length;
-                    if (totalBytes > MAX_IMAGE_BYTES) throw new IOException("Issue images exceed the 128 MB file limit.");
-                    image = ImageAsset.fromBytes(bytes);
-                    if (!image.archivePath().equals(path)) throw new IOException("Article image content does not match its reference");
-                    loadedImages.put(path, image);
-                }
-                images.add(image);
+            for (JsonNode reference : array(node, "images")) images.add(assets.read(reference));
+            List<StyledRange> ranges = new ArrayList<>();
+            for (JsonNode value : array(node, "styledRanges")) {
+                JsonNode style = value.path("style");
+                ranges.add(new StyledRange(integer(value, "start"), integer(value, "end"),
+                        new TextStyle(integer(style, "fontSize"), TextStyle.Weight.valueOf(text(style, "fontWeight")))));
             }
-            articles.add(new Article(UUID.fromString(text(node, "id")), text(node, "title"),
-                    text(node, "author"), text(node, "text"), images));
+            articles.add(new Article(id, text(node, "title"), text(node, "author"), text(node, "text"), images, ranges));
+            readPlacement(placed, node, id);
         }
-        return new Issue(UUID.fromString(text(root, "id")), integer(root, "issueNumber"),
-                LocalDate.parse(text(root, "publicationDate")), pageFormat,
-                new Cover(text(coverNode, "title")), articles);
+        List<Advertisement> advertisements = new ArrayList<>();
+        for (JsonNode node : array(root, "advertisements")) {
+            UUID id = id(node);
+            advertisements.add(new Advertisement(id, text(node, "text"), assets.readOptional(node.path("image"))));
+            readPlacement(placed, node, id);
+        }
+        List<PageTemplate> templates = new ArrayList<>();
+        for (JsonNode node : array(root, "templates")) {
+            templates.add(new PageTemplate(id(node), text(node, "name"), readLayout(node)));
+        }
+        List<Page> pages = new ArrayList<>();
+        for (JsonNode node : array(root, "pages")) {
+            Map<UUID, Page.Placement> standalone = new LinkedHashMap<>();
+            for (JsonNode image : array(node, "imageElements")) {
+                UUID id = id(image);
+                var item = new Page.Placement(id, readBox(image), assets.read(image.path("image")));
+                if (standalone.putIfAbsent(id, item) != null) throw new IOException("Duplicate image block");
+            }
+            List<Page.Placement> items = new ArrayList<>();
+            for (JsonNode element : array(node, "elements")) {
+                if (!element.isTextual()) throw new IOException("Invalid page element id");
+                UUID id = UUID.fromString(element.textValue());
+                Page.Placement item = standalone.remove(id);
+                if (item == null) item = placed.remove(id);
+                if (item == null) throw new IOException("Missing or repeated page element " + id);
+                items.add(item);
+            }
+            if (!standalone.isEmpty()) throw new IOException("Unreferenced image block");
+            UUID templateId = node.path("templateId").isNull() ? null : UUID.fromString(text(node, "templateId"));
+            pages.add(new Page(id(node), readLayout(node), templateId, items));
+        }
+        if (!placed.isEmpty()) throw new IOException("Positioned blocks must belong to a page");
+        return new Issue(id(root), integer(root, "issueNumber"), LocalDate.parse(text(root, "publicationDate")),
+                pageFormat, cover, articles, advertisements, pages, templates);
+    }
+
+    private static void readPlacement(Map<UUID, Page.Placement> placed, JsonNode node, UUID id) throws IOException {
+        if (node.path("position").isNull() && node.path("size").isNull()) return;
+        if (placed.putIfAbsent(id, new Page.Placement(id, readBox(node), null)) != null) {
+            throw new IOException("Repeated positioned element " + id);
+        }
+    }
+
+    private static Page.Box readBox(JsonNode node) throws IOException {
+        JsonNode position = node.path("position");
+        JsonNode size = node.path("size");
+        return new Page.Box(number(position, "x"), number(position, "y"),
+                number(size, "width"), number(size, "height"));
+    }
+
+    private static Page.Layout readLayout(JsonNode node) throws IOException {
+        JsonNode margins = node.path("margins");
+        return new Page.Layout(integer(node, "columns"),
+                new Page.Margins(number(margins, "top"), number(margins, "right"),
+                        number(margins, "bottom"), number(margins, "left")), text(node, "headerFooterText"));
+    }
+
+    private static double number(JsonNode node, String field) throws IOException {
+        JsonNode value = node.path(field);
+        if (!value.isNumber()) throw new IOException("Missing or invalid " + field);
+        return value.doubleValue();
+    }
+
+    private static UUID id(JsonNode node) throws IOException {
+        return UUID.fromString(text(node, "id"));
+    }
+
+    private static JsonNode array(JsonNode node, String field) throws IOException {
+        JsonNode value = node.path(field);
+        if (!value.isArray()) throw new IOException("Missing or invalid " + field);
+        return value;
+    }
+
+    private static final class ArchiveImages {
+        private final ZipFile zip;
+        private final Map<String, ImageAsset> loaded = new LinkedHashMap<>();
+        private long totalBytes;
+
+        ArchiveImages(ZipFile zip) {
+            this.zip = zip;
+        }
+
+        ImageAsset readOptional(JsonNode reference) throws IOException {
+            return reference.isNull() ? null : read(reference);
+        }
+
+        ImageAsset read(JsonNode reference) throws IOException {
+            if (!reference.isTextual() || !reference.textValue().matches("images/[a-f0-9]{64}\\.(png|jpg)")) {
+                throw new IOException("Invalid image reference");
+            }
+            String path = reference.textValue();
+            ImageAsset existing = loaded.get(path);
+            if (existing != null) return existing;
+            ZipEntry entry = zip.getEntry(path);
+            if (entry == null || entry.isDirectory() || entry.getSize() > ImageAsset.MAX_BYTES) {
+                throw new IOException("Missing or oversized image: " + path);
+            }
+            byte[] bytes;
+            try (InputStream input = zip.getInputStream(entry)) {
+                bytes = input.readNBytes(ImageAsset.MAX_BYTES + 1);
+            }
+            totalBytes += bytes.length;
+            if (totalBytes > MAX_IMAGE_BYTES) throw new IOException("Issue images exceed the 128 MB file limit.");
+            ImageAsset image = ImageAsset.fromBytes(bytes);
+            if (!image.archivePath().equals(path)) throw new IOException("Image content does not match its reference");
+            loaded.put(path, image);
+            return image;
+        }
     }
 
     private static String text(JsonNode node, String field) throws IOException {

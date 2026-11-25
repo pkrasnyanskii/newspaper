@@ -5,9 +5,12 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import ru.nsu.newspaper.model.Article;
+import ru.nsu.newspaper.model.Advertisement;
 import ru.nsu.newspaper.model.ImageAsset;
 import ru.nsu.newspaper.model.Issue;
 import ru.nsu.newspaper.model.PageFormat;
+import ru.nsu.newspaper.model.Page;
+import ru.nsu.newspaper.model.TextStyle;
 
 import javax.imageio.ImageIO;
 import java.awt.image.BufferedImage;
@@ -18,6 +21,7 @@ import java.nio.file.Path;
 import java.time.LocalDate;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 import java.util.function.Consumer;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
@@ -41,6 +45,30 @@ class ArticleStorageTest {
         try (ZipFile zip = new ZipFile(file.toFile())) {
             assertEquals(1, zip.stream().filter(entry -> entry.getName().startsWith("images/")).count());
             assertEquals(ZipEntry.STORED, zip.getEntry(image.archivePath()).getMethod());
+        }
+    }
+
+    @Test
+    void restoresCoverStyledArticlesTemplatesAndAllThreeTypesOfPlacedBlocks() throws IOException {
+        ImageAsset image = image(0x3366aa);
+        Article article = Article.create("Report", "Reporter", "Local news", List.of(image))
+                .style(0, 5, new TextStyle(14, TextStyle.Weight.BOLD));
+        Issue issue = emptyIssue().withCoverImage(image).addArticle(article).addPage().addPage();
+        UUID first = issue.pages().getFirst().id();
+        UUID last = issue.pages().getLast().id();
+        issue = issue.updateLayout(first, new Page.Layout(2, new Page.Margins(20, 15, 20, 15), "News"));
+        issue = issue.saveTemplate(first, "Standard");
+        issue = issue.applyTemplate(last, issue.templates().getFirst().id())
+                .place(last, article.id(), new Page.Box(20, 22, 120, 100))
+                .putAdvertisement(new Advertisement(UUID.randomUUID(), "Advertisement", image),
+                        last, new Page.Box(20, 140, 50, 40))
+                .putImage(last, UUID.randomUUID(), new Page.Box(120, 140, 40, 40), image);
+        Path file = folder.resolve("layout.issue");
+        storage.save(issue, file);
+        assertEquals(issue, storage.open(file));
+        assertEquals(2, storage.open(file).contents().getFirst().pageNumber());
+        try (ZipFile zip = new ZipFile(file.toFile())) {
+            assertEquals(1, zip.stream().filter(entry -> entry.getName().startsWith("images/")).count());
         }
     }
 

@@ -2,6 +2,7 @@ package ru.nsu.newspaper;
 
 import javafx.application.Application;
 import javafx.beans.value.ChangeListener;
+import javafx.concurrent.Task;
 import javafx.geometry.Insets;
 import javafx.scene.Node;
 import javafx.scene.Scene;
@@ -10,10 +11,13 @@ import javafx.scene.input.KeyCombination;
 import javafx.scene.layout.*;
 import javafx.stage.FileChooser;
 import javafx.stage.Stage;
+import ru.nsu.newspaper.export.PdfExporter;
 import ru.nsu.newspaper.model.Issue;
 import ru.nsu.newspaper.model.PageFormat;
 import ru.nsu.newspaper.storage.IssueStorage;
 import ru.nsu.newspaper.ui.ArticlesPane;
+import ru.nsu.newspaper.ui.ImageField;
+import ru.nsu.newspaper.ui.PagesPane;
 
 import java.io.File;
 import java.io.IOException;
@@ -33,13 +37,18 @@ public final class MainApp extends Application {
     private final Label status = new Label();
     private final Button save = new Button("Save");
     private final Button saveAs = new Button("Save as...");
+    private final Button export = new Button("Export PDF...");
     private final Tab articlesTab = new Tab("Articles (0)");
+    private final ListView<String> contents = new ListView<>();
+    private final ImageField coverImage = new ImageField("Choose cover image...", this::detailsEdited);
     private Issue currentIssue;
     private Path currentFile;
     private Stage stage;
     private ArticlesPane articles;
+    private PagesPane pages;
     private boolean dirty;
     private boolean loading;
+    private boolean exporting;
 
     @Override
     public void start(Stage primaryStage) {
@@ -51,9 +60,7 @@ public final class MainApp extends Application {
         numberField.setId("issue-number");
         datePicker.setId("issue-date");
         formatBox.setId("issue-format");
-        ChangeListener<Object> edited = (observable, oldValue, newValue) -> {
-            if (!loading && currentIssue != null) { dirty = true; refreshStatus(); }
-        };
+        ChangeListener<Object> edited = (observable, oldValue, newValue) -> detailsEdited();
         titleField.textProperty().addListener(edited);
         numberField.textProperty().addListener(edited);
         datePicker.valueProperty().addListener(edited);
@@ -72,21 +79,24 @@ public final class MainApp extends Application {
         open.setOnAction(event -> openIssue());
         save.setOnAction(event -> saveIssue(false));
         saveAs.setOnAction(event -> saveIssue(true));
+        export.setOnAction(event -> exportIssue());
         save.getStyleClass().add("primary-button");
-        for (Button button : new Button[]{create, open, save, saveAs}) button.setMinWidth(Region.USE_PREF_SIZE);
-        FlowPane actions = new FlowPane(10, 10, create, open, save, saveAs);
+        for (Button button : new Button[]{create, open, save, saveAs, export}) button.setMinWidth(Region.USE_PREF_SIZE);
+        FlowPane actions = new FlowPane(10, 10, create, open, save, saveAs, export);
         actions.setMinWidth(0);
         VBox header = new VBox(12, heading, actions);
         header.setPadding(new Insets(16, 24, 16, 24));
 
-        articles = new ArticlesPane(stage, updated -> {
-            currentIssue = updated;
-            dirty = true;
-            refreshArticles();
-            refreshStatus();
-        });
+        articles = new ArticlesPane(stage, this::issueEdited);
+        pages = new PagesPane(stage, this::issueEdited);
         articlesTab.setContent(articles);
-        TabPane tabs = new TabPane(new Tab("Issue details", issueDetails()), articlesTab);
+        contents.setPlaceholder(new Label("Add an article to populate the table of contents."));
+        Label contentsHint = new Label("Page numbers update automatically from the layout.");
+        VBox contentsView = new VBox(12, contentsHint, contents);
+        contentsView.setPadding(new Insets(24));
+        VBox.setVgrow(contents, Priority.ALWAYS);
+        TabPane tabs = new TabPane(new Tab("Issue details", issueDetails()), articlesTab,
+                new Tab("Pages", pages), new Tab("Contents", contentsView));
         tabs.setId("workspace-tabs");
         tabs.setTabClosingPolicy(TabPane.TabClosingPolicy.UNAVAILABLE);
         tabs.setMinSize(0, 0);
@@ -125,7 +135,7 @@ public final class MainApp extends Application {
         arrangeFields(metadata, fields, 3);
         metadata.widthProperty().addListener((observable, oldWidth, newWidth) ->
                 arrangeFields(metadata, fields, newWidth.doubleValue() < 560 ? 1 : 3));
-        VBox form = new VBox(18, formHeading, help, field("Publication title", titleField), metadata);
+        VBox form = new VBox(18, formHeading, help, field("Publication title", titleField), metadata, coverImage);
         form.setMinWidth(0);
         form.setPadding(new Insets(24));
         form.getStyleClass().add("issue-card");
@@ -166,12 +176,13 @@ public final class MainApp extends Application {
 
     private void createIssue() {
         try {
-            Issue created = Issue.create(number(), date(), pageFormat(), titleField.getText().trim());
+            Issue created = Issue.create(number(), date(), pageFormat(), titleField.getText().trim())
+                    .withCoverImage(coverImage.image());
             if (!confirmUnsavedChanges()) return;
             currentIssue = created;
             currentFile = null;
             dirty = true;
-            refreshArticles();
+            refreshWorkspace();
             refreshStatus();
         } catch (IllegalArgumentException | DateTimeParseException e) {
             error("Cannot create issue", e.getMessage());
@@ -195,9 +206,10 @@ public final class MainApp extends Application {
                 numberField.setText(Integer.toString(loaded.issueNumber()));
                 datePicker.setValue(loaded.publicationDate());
                 formatBox.setValue(loaded.pageFormat());
+                coverImage.setImage(loaded.cover().image());
             } finally { loading = false; }
             dirty = false;
-            refreshArticles();
+            refreshWorkspace();
             refreshStatus();
         } catch (IOException e) {
             error("Cannot open issue", e.getMessage());
@@ -207,7 +219,7 @@ public final class MainApp extends Application {
     private boolean saveIssue(boolean chooseNewFile) {
         if (currentIssue == null) return false;
         try {
-            Issue updated = currentIssue.withDetails(number(), date(), pageFormat(), titleField.getText().trim());
+            Issue updated = issueWithDetails(date());
             Path target = currentFile;
             if (chooseNewFile || target == null) {
                 FileChooser chooser = chooser("Save issue");
@@ -225,11 +237,56 @@ public final class MainApp extends Application {
             currentIssue = updated;
             currentFile = target;
             dirty = false;
+            refreshWorkspace();
             refreshStatus();
             return true;
         } catch (IllegalArgumentException | DateTimeParseException | IOException e) {
             error("Cannot save issue", e.getMessage());
             return false;
+        }
+    }
+
+    private void exportIssue() {
+        if (currentIssue == null || currentIssue.pages().isEmpty() || exporting) return;
+        try {
+            Issue snapshot = issueWithDetails(date());
+            FileChooser chooser = new FileChooser();
+            chooser.setTitle("Export issue to PDF");
+            chooser.setInitialFileName("issue-" + snapshot.issueNumber() + ".pdf");
+            chooser.getExtensionFilters().add(new FileChooser.ExtensionFilter("PDF file (*.pdf)", "*.pdf"));
+            File file = chooser.showSaveDialog(stage);
+            if (file == null) return;
+            Path target = file.toPath();
+            if (!file.getName().toLowerCase(Locale.ROOT).endsWith(".pdf")) {
+                target = target.resolveSibling(file.getName() + ".pdf");
+                if (Files.exists(target) && !confirmReplacement(target)) return;
+            }
+            Path output = target;
+            Task<Void> task = new Task<>() {
+                @Override protected Void call() throws IOException {
+                    new PdfExporter().export(snapshot, output);
+                    return null;
+                }
+            };
+            exporting = true;
+            refreshStatus();
+            task.setOnSucceeded(event -> {
+                exporting = false;
+                refreshStatus();
+                Alert success = new Alert(Alert.AlertType.INFORMATION, "Saved " + output.toAbsolutePath(), ButtonType.OK);
+                success.initOwner(stage);
+                success.setHeaderText("Issue exported");
+                success.showAndWait();
+            });
+            task.setOnFailed(event -> {
+                exporting = false;
+                refreshStatus();
+                error("Cannot export issue", task.getException().getMessage());
+            });
+            Thread worker = new Thread(task, "pdf-export");
+            worker.start();
+        } catch (IllegalArgumentException | DateTimeParseException e) {
+            error("Cannot export issue", e.getMessage());
         }
     }
 
@@ -254,16 +311,53 @@ public final class MainApp extends Application {
         return alert.showAndWait().orElse(ButtonType.CANCEL) == ButtonType.YES;
     }
 
-    private void refreshArticles() {
+    private void detailsEdited() {
+        if (loading || currentIssue == null) return;
+        dirty = true;
+        refreshPageSnapshot();
+        refreshStatus();
+    }
+
+    private void refreshPageSnapshot() {
+        Issue display = currentIssue;
+        try {
+            if (display != null) {
+                display = issueWithDetails(datePicker.getConverter().fromString(datePicker.getEditor().getText()));
+            }
+        } catch (IllegalArgumentException | DateTimeParseException ignored) {
+            // Incomplete form input stays available for correction.
+        }
+        pages.setIssue(display);
+    }
+
+    private Issue issueWithDetails(LocalDate date) {
+        if (date == null) throw new IllegalArgumentException("Choose an issue date");
+        return currentIssue.withDetails(number(), date, pageFormat(), titleField.getText().trim())
+                .withCoverImage(coverImage.image());
+    }
+
+    private void issueEdited(Issue updated) {
+        currentIssue = updated;
+        dirty = true;
+        refreshWorkspace();
+        refreshStatus();
+    }
+
+    private void refreshWorkspace() {
         articles.setIssue(currentIssue);
         articlesTab.setText("Articles (" + (currentIssue == null ? 0 : currentIssue.articles().size()) + ")");
+        refreshPageSnapshot();
+        contents.getItems().setAll(currentIssue == null ? java.util.List.of() : currentIssue.contents().stream()
+                .map(entry -> (entry.pageNumber() == null ? "-" : entry.pageNumber()) + "    " + entry.title()).toList());
     }
 
     private void refreshStatus() {
         save.setDisable(currentIssue == null);
         saveAs.setDisable(currentIssue == null);
+        export.setDisable(exporting || currentIssue == null || currentIssue.pages().isEmpty());
         String name = currentFile == null ? "Untitled issue" : currentFile.getFileName().toString();
-        status.setText(currentIssue == null ? "No issue is open" : (dirty ? "Unsaved changes · " : "Saved · ") + name);
+        status.setText(exporting ? "Exporting PDF…" : currentIssue == null
+                ? "No issue is open" : (dirty ? "Unsaved changes · " : "Saved · ") + name);
         status.setTooltip(new Tooltip(currentFile == null ? status.getText() : currentFile.toAbsolutePath().toString()));
         stage.setTitle((dirty ? "* " : "") + "Newspaper" + (currentIssue == null ? "" : " — " + name));
     }
